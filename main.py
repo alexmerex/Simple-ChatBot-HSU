@@ -1,92 +1,212 @@
-import tkinter as tk
-from tkinter import scrolledtext, messagebox
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.neighbors import KDTree
-import re
+import argparse
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+from tkinter import Tk, messagebox
 
-# Đọc dữ liệu từ file
-with open("knowledge.txt", "r", encoding="utf-8") as file:
-    text_data = file.readlines()
+ROOT_DIR = Path(__file__).resolve().parent
+SRC_DIR = ROOT_DIR / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
-# Chuẩn hóa văn bản và xử lý dữ liệu
-def preprocess_text(text):
-    text = text.lower()
-    text = re.sub(r'[^\w\s]', '', text)
-    return text
+from chatbot_hsu.config import ChatbotConfig
+from chatbot_hsu.engine import ChatbotEngine
+from chatbot_hsu.gui import ChatBotApp
+from chatbot_hsu.history import HistoryTurn, export_history_json, export_history_txt
+from chatbot_hsu.logging_utils import configure_logging
 
-# Xử lý câu hỏi
-def process_question(question):
-    question = preprocess_text(question)
-    return question
 
-# Sử dụng TF-IDF để vector hóa dữ liệu
-tfidf_vectorizer = TfidfVectorizer(max_df=0.85, min_df=2, max_features=1000)
-vectorized_data = tfidf_vectorizer.fit_transform([process_question(sentence) for sentence in text_data])
+CLI_HELP = """Available commands:
+  /help                Show this help
+  /clear               Clear current session history
+  /reload              Reload knowledge index immediately
+  /config              Show current runtime config
+  /topk [n]            Show/set top-k explanation rows in CLI
+  /export json|txt     Export current history manually
+  exit | quit          Exit CLI (auto-export history)
+"""
 
-# Chuyển đổi ma trận thưa sang mảng mật độ
-dense_vectorized_data = vectorized_data.toarray()
 
-# Xây dựng KD-Tree với kích thước lá là 10
-kdtree = KDTree(dense_vectorized_data, leaf_size=10)
-
-def get_answer(query):
-    # Xử lý câu hỏi
-    processed_query = process_question(query)
-
-    # Vector hóa câu truy vấn
-    query_vector = tfidf_vectorizer.transform([processed_query]).toarray()
-
-    # Tìm câu trả lời gần nhất trong KD-Tree
-    _, idx = kdtree.query(query_vector, k=1)
-
-    return text_data[idx.item()]
-
-def on_send(event=None):
-    user_input = user_entry.get()
-
-    if not user_input:
-        messagebox.showwarning("Warning", "Please enter a question.")
+def _print_topk(result, top_k: int):
+    if not result.candidates:
+        print("Top-k: no candidates")
         return
 
-    # Hiển thị câu trả lời
-    answer = get_answer(user_input)
+    for rank, c in enumerate(result.candidates[:top_k], start=1):
+        print(f"#{rank} score={c.final_score:.4f} sim={c.similarity:.4f} lex={c.lexical_score:.4f} -> {c.answer}")
 
-    # Xóa nội dung trong phần hiển thị câu trả lời
-    chat_display.insert(tk.END, f"User: {user_input}\nChatBot: {answer}\n\n")
 
-    # Xóa ô nhập liệu sau khi gửi
-    user_entry.delete(0, tk.END)
+def _print_config(engine: ChatbotEngine):
+    snapshot = engine.config_snapshot()
+    print("Current config:")
+    print(json.dumps(snapshot, ensure_ascii=False, indent=2))
 
-# Tạo cửa sổ
-window = tk.Tk()
-window.title("ChatBot GUI")
 
-# Thiết lập chiều rộng mong muốn
-desired_width = 1000
+def _auto_export_history(history: list[HistoryTurn], config: ChatbotConfig, source: str, session_id: str) -> None:
+    if not history:
+        return
 
-# Tạo phần hiển thị câu trả lời
-chat_display = scrolledtext.ScrolledText(window, width=int(desired_width / 10), height=20, wrap=tk.WORD)
-chat_display.grid(row=0, column=0, padx=10, pady=10, columnspan=2, sticky="nsew")  # Thêm sticky="nsew"
+    json_path = export_history_json(
+        history,
+        config.history_export_dir,
+        filename_prefix=f"{source}_auto",
+        session_id=session_id,
+        keep_last_exports=config.history_keep_last_exports,
+    )
+    txt_path = export_history_txt(
+        history,
+        config.history_export_dir,
+        filename_prefix=f"{source}_auto",
+        session_id=session_id,
+        keep_last_exports=config.history_keep_last_exports,
+    )
+    print(f"Auto-exported history:\n  JSON: {json_path}\n  TXT: {txt_path}")
 
-# Tạo thanh chat để nhập câu hỏi
-user_entry = tk.Entry(window, width=int(desired_width / 10))
-user_entry.grid(row=1, column=0, padx=10, pady=10, columnspan=2, sticky="nsew")  # Thêm sticky="nsew"
 
-# Tạo nút Gửi
-send_button = tk.Button(window, text="Send", command=on_send)
-send_button.grid(row=2, column=0, padx=10, pady=10, columnspan=2, sticky="nsew")  # Thêm sticky="nsew"
+def run_cli(engine: ChatbotEngine, config: ChatbotConfig) -> None:
+    session_id = f"cli-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    print(f"ChatBot CLI mode. Session: {session_id}. Type 'exit' to quit.")
+    print(CLI_HELP)
 
-# Bắt sự kiện khi nhấn phím Enter
-user_entry.bind("<Return>", on_send)
+    history: list[HistoryTurn] = []
+    topk_override: int | None = None
 
-# Thiết lập trọng số cột
-window.columnconfigure(0, weight=1)  # Cột 0 co giãn khi cửa sổ thay đổi kích thước
-window.columnconfigure(1, weight=1)  # Cột 1 cũng co giãn
+    while True:
+        user_input = input("You: ").strip()
+        if user_input.lower() in {"exit", "quit"}:
+            print("Bye!")
+            break
 
-# Thiết lập trọng số hàng
-window.rowconfigure(0, weight=1)  # Hàng 0 co giãn
-window.rowconfigure(1, weight=1)  # Hàng 1 co giãn
-window.rowconfigure(2, weight=1)  # Hàng 2 co giãn
+        if user_input.startswith("/"):
+            cmd_parts = user_input.split()
+            cmd = cmd_parts[0].lower()
 
-# Bắt đầu vòng lặp chạy GUI
-window.mainloop()
+            if cmd == "/help":
+                print(CLI_HELP)
+                continue
+
+            if cmd == "/clear":
+                history.clear()
+                print("Session history cleared.")
+                continue
+
+            if cmd == "/reload":
+                try:
+                    engine.force_reload()
+                    print("Reloaded knowledge index.")
+                except (FileNotFoundError, ValueError) as exc:
+                    print(f"Reload failed: {exc}")
+                continue
+
+            if cmd == "/config":
+                _print_config(engine)
+                continue
+
+            if cmd == "/topk":
+                if len(cmd_parts) == 2:
+                    try:
+                        topk_override = max(1, int(cmd_parts[1]))
+                        print(f"Top-k display set to {topk_override}")
+                    except ValueError:
+                        print("Usage: /topk [n]")
+                else:
+                    current = topk_override if topk_override is not None else config.explanation_top_k
+                    print(f"Current top-k display: {current}")
+                continue
+
+            if cmd == "/export" and len(cmd_parts) == 2:
+                if not history:
+                    print("No history to export yet.")
+                    continue
+                kind = cmd_parts[1].lower()
+                if kind == "json":
+                    output = export_history_json(
+                        history,
+                        config.history_export_dir,
+                        session_id=session_id,
+                        keep_last_exports=config.history_keep_last_exports,
+                    )
+                    print(f"Exported JSON: {output}")
+                elif kind == "txt":
+                    output = export_history_txt(
+                        history,
+                        config.history_export_dir,
+                        session_id=session_id,
+                        keep_last_exports=config.history_keep_last_exports,
+                    )
+                    print(f"Exported TXT: {output}")
+                else:
+                    print("Usage: /export json|txt")
+                continue
+
+            print("Unknown command. Type /help")
+            continue
+
+        result = engine.ask(user_input)
+        print(f"Bot: {result.answer}")
+
+        history.append(
+            HistoryTurn(
+                timestamp=datetime.now().isoformat(timespec="seconds"),
+                user=user_input,
+                bot=result.answer,
+                similarity=result.similarity,
+                index=result.index,
+                used_fallback=result.used_fallback,
+            )
+        )
+
+        if config.debug:
+            print(
+                f"Debug: similarity={result.similarity:.4f}, index={result.index}, fallback={result.used_fallback}"
+            )
+
+        if config.show_explanations and result.candidates:
+            display_k = topk_override if topk_override is not None else config.explanation_top_k
+            print("Explain: Top candidates")
+            _print_topk(result, display_k)
+
+    _auto_export_history(history, config, source="cli", session_id=session_id)
+
+
+def run_gui(engine: ChatbotEngine, config: ChatbotConfig) -> None:
+    app = ChatBotApp(engine=engine, config=config)
+    app.run()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="HSU ChatBot")
+    parser.add_argument("--mode", choices=["gui", "cli"], help="Override mode from .env")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    config = ChatbotConfig()
+
+    if args.mode:
+        config.mode = args.mode
+
+    configure_logging(level=config.log_level, debug=config.debug)
+
+    try:
+        engine = ChatbotEngine(config)
+    except (FileNotFoundError, ValueError) as exc:
+        if config.mode == "gui":
+            root = Tk()
+            root.withdraw()
+            messagebox.showerror("Startup error", str(exc))
+            root.destroy()
+        else:
+            print(f"Startup error: {exc}")
+        return
+
+    if config.mode == "cli":
+        run_cli(engine, config)
+    else:
+        run_gui(engine, config)
+
+
+if __name__ == "__main__":
+    main()
