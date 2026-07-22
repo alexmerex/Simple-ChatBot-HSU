@@ -48,6 +48,16 @@ def test_low_confidence_returns_fallback(tmp_path: Path):
     assert result.used_fallback is True
 
 
+def test_unrelated_query_uses_fallback_with_default_threshold(tmp_path: Path):
+    knowledge = _write_knowledge(tmp_path, ["Đại học Hoa Sen có chương trình quốc tế."])
+    engine = ChatbotEngine(ChatbotConfig(knowledge_file=knowledge))
+
+    result = engine.ask("dự báo thời tiết ngày mai")
+
+    assert result.used_fallback is True
+    assert result.similarity == 0.0
+
+
 def test_top_candidates_explanations(tmp_path: Path):
     knowledge = _write_knowledge(
         tmp_path,

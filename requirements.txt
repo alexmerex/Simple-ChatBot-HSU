@@ -1,4 +1,13 @@
+# Core retrieval stack
 scikit-learn>=1.3,<2.0
 numpy>=1.26,<3.0
-pytest>=8.0,<9.0
+
+# Config
 python-dotenv>=1.0,<2.0
+
+# Web crawling
+requests>=2.31,<3.0
+beautifulsoup4>=4.12,<5.0
+
+# Optional acceleration: `pip install faiss-cpu>=1.8,<2.0`.
+# The application automatically uses a NumPy index when FAISS is unavailable.

@@ -1,5 +1,5 @@
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -12,6 +12,7 @@ class HistoryTurn:
     similarity: float
     index: int
     used_fallback: bool
+    citation_urls: list[str] = field(default_factory=list)
 
 
 def _ensure_export_dir(export_dir: Path) -> Path:
@@ -31,13 +32,15 @@ def prune_old_exports(export_dir: Path, keep_last: int = 20) -> int:
     )
 
     to_delete = files[keep_last:]
+    deleted = 0
     for file_path in to_delete:
         try:
             file_path.unlink(missing_ok=True)
+            deleted += 1
         except OSError:
             continue
 
-    return len(to_delete)
+    return deleted
 
 
 def export_history_json(
@@ -48,7 +51,7 @@ def export_history_json(
     keep_last_exports: int = 20,
 ) -> Path:
     export_dir = _ensure_export_dir(export_dir)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     session_part = f"-{session_id}" if session_id else ""
     output = export_dir / f"{filename_prefix}{session_part}-{stamp}.json"
 
@@ -71,7 +74,7 @@ def export_history_txt(
     keep_last_exports: int = 20,
 ) -> Path:
     export_dir = _ensure_export_dir(export_dir)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     session_part = f"-{session_id}" if session_id else ""
     output = export_dir / f"{filename_prefix}{session_part}-{stamp}.txt"
 
@@ -87,6 +90,8 @@ def export_history_txt(
         lines.append(
             f"Meta: similarity={turn.similarity:.4f}, index={turn.index}, fallback={turn.used_fallback}"
         )
+        if turn.citation_urls:
+            lines.append(f"Citations: {', '.join(turn.citation_urls)}")
         lines.append("")
 
     output.write_text("\n".join(lines), encoding="utf-8")

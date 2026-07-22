@@ -49,10 +49,14 @@ class ChatBotApp:
         self.send_button = tk.Button(self.bottom_frame, text="Send", command=self.on_send)
         self.send_button.grid(row=0, column=1, padx=(0, 8))
 
-        self.clear_button = tk.Button(self.bottom_frame, text="Clear Chat", command=self.on_clear_chat)
+        self.clear_button = tk.Button(
+            self.bottom_frame, text="Clear Chat", command=self.on_clear_chat
+        )
         self.clear_button.grid(row=0, column=2, padx=(0, 8))
 
-        self.reload_button = tk.Button(self.bottom_frame, text="Reload Knowledge", command=self.on_reload_knowledge)
+        self.reload_button = tk.Button(
+            self.bottom_frame, text="Reload Knowledge", command=self.on_reload_knowledge
+        )
         self.reload_button.grid(row=0, column=3, padx=(0, 8))
 
         self.export_json_button = tk.Button(
@@ -92,11 +96,18 @@ class ChatBotApp:
         self.explain_panel.configure(state=tk.NORMAL)
         self.explain_panel.delete("1.0", tk.END)
 
+        self.explain_panel.insert(tk.END, f"Session: {self.session_id}\n")
+
+        if result.citation_urls:
+            self.explain_panel.insert(tk.END, "Citations\n")
+            self.explain_panel.insert(tk.END, "=" * 60 + "\n")
+            for url in result.citation_urls:
+                self.explain_panel.insert(tk.END, f"- {url}\n")
+            self.explain_panel.insert(tk.END, "\n")
+
         if not self.config.show_explanations or not result.candidates:
-            self.explain_panel.insert(tk.END, f"Session: {self.session_id}\n")
             self.explain_panel.insert(tk.END, "Explanations disabled or no candidates.\n")
         else:
-            self.explain_panel.insert(tk.END, f"Session: {self.session_id}\n")
             self.explain_panel.insert(tk.END, "Top candidates\n")
             self.explain_panel.insert(tk.END, "=" * 60 + "\n")
             for rank, c in enumerate(result.candidates, start=1):
@@ -127,6 +138,7 @@ class ChatBotApp:
                 similarity=result.similarity,
                 index=result.index,
                 used_fallback=result.used_fallback,
+                citation_urls=result.citation_urls or [],
             )
         )
 
@@ -163,7 +175,11 @@ class ChatBotApp:
             messagebox.showwarning("Warning", "Please enter a question.")
             return
 
-        result = self.engine.ask(user_input)
+        try:
+            result = self.engine.ask(user_input)
+        except (OSError, RuntimeError, ValueError) as exc:
+            messagebox.showerror("Request failed", str(exc))
+            return
 
         self._append_chat("User", user_input)
         self._append_chat("ChatBot", result.answer)
@@ -197,7 +213,7 @@ class ChatBotApp:
         try:
             self.engine.force_reload()
             messagebox.showinfo("Reload", "Knowledge reloaded successfully.")
-        except (FileNotFoundError, ValueError) as exc:
+        except (OSError, RuntimeError, ValueError) as exc:
             messagebox.showerror("Reload failed", str(exc))
 
     def on_export_json(self):
@@ -206,12 +222,16 @@ class ChatBotApp:
             return
 
         export_dir = self._choose_export_dir()
-        output = export_history_json(
-            self.history,
-            export_dir,
-            session_id=self.session_id,
-            keep_last_exports=self.config.history_keep_last_exports,
-        )
+        try:
+            output = export_history_json(
+                self.history,
+                export_dir,
+                session_id=self.session_id,
+                keep_last_exports=self.config.history_keep_last_exports,
+            )
+        except OSError as exc:
+            messagebox.showerror("Export failed", str(exc))
+            return
         messagebox.showinfo("Export", f"Exported JSON to:\n{output}")
 
     def on_export_txt(self):
@@ -220,16 +240,23 @@ class ChatBotApp:
             return
 
         export_dir = self._choose_export_dir()
-        output = export_history_txt(
-            self.history,
-            export_dir,
-            session_id=self.session_id,
-            keep_last_exports=self.config.history_keep_last_exports,
-        )
+        try:
+            output = export_history_txt(
+                self.history,
+                export_dir,
+                session_id=self.session_id,
+                keep_last_exports=self.config.history_keep_last_exports,
+            )
+        except OSError as exc:
+            messagebox.showerror("Export failed", str(exc))
+            return
         messagebox.showinfo("Export", f"Exported TXT to:\n{output}")
 
     def on_close(self):
-        self._export_history_auto()
+        try:
+            self._export_history_auto()
+        except OSError as exc:
+            messagebox.showwarning("Auto-export failed", str(exc))
         self.window.destroy()
 
     def run(self) -> None:
