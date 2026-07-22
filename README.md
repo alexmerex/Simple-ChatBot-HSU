@@ -130,6 +130,18 @@ python main.py --mode gui
 
 </details>
 
+### Định dạng kho tri thức local
+
+Mỗi dòng trong `knowledge.txt` là một câu trả lời độc lập. Có thể gắn nguồn chính thức bằng
+dấu phân cách ` || ` để chatbot hiển thị citation nhưng không đưa URL vào nội dung trả lời:
+
+```text
+Nội dung đã được kiểm chứng. || https://www.hoasen.edu.vn/trang-nguon/
+```
+
+Các dòng không có URL vẫn tương thích như trước. Khi chỉnh sửa file lúc ứng dụng đang chạy,
+hot reload sẽ tự dựng lại local index.
+
 <details>
 <summary><strong>Cấu hình web retrieval</strong></summary>
 

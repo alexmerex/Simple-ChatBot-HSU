@@ -58,6 +58,20 @@ def test_unrelated_query_uses_fallback_with_default_threshold(tmp_path: Path):
     assert result.similarity == 0.0
 
 
+def test_local_knowledge_source_is_returned_as_citation(tmp_path: Path):
+    source_url = "https://www.hoasen.edu.vn/tuyensinh/"
+    knowledge = _write_knowledge(
+        tmp_path,
+        [f"Đại học Hoa Sen có năm phương thức xét tuyển năm 2026. || {source_url}"],
+    )
+    engine = ChatbotEngine(ChatbotConfig(knowledge_file=knowledge, similarity_threshold=0.1))
+
+    result = engine.ask("phương thức xét tuyển 2026")
+
+    assert result.answer == "Đại học Hoa Sen có năm phương thức xét tuyển năm 2026."
+    assert result.citation_urls == [source_url]
+
+
 def test_top_candidates_explanations(tmp_path: Path):
     knowledge = _write_knowledge(
         tmp_path,

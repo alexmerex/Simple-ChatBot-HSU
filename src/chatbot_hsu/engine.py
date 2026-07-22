@@ -3,6 +3,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -41,6 +42,7 @@ class ChatbotEngine:
         self._knowledge_mtime_ns: int | None = None
 
         self.raw_data: list[str] = []
+        self.local_source_urls: list[str | None] = []
         self.normalized_data: list[str] = []
         self.vectorizer: TfidfVectorizer | None = None
         self.matrix = None
@@ -74,7 +76,10 @@ class ChatbotEngine:
         return lines
 
     def _build_index(self) -> None:
-        self.raw_data = self._load_knowledge()
+        knowledge_lines = self._load_knowledge()
+        parsed_lines = [self._parse_knowledge_line(line) for line in knowledge_lines]
+        self.raw_data = [answer for answer, _ in parsed_lines]
+        self.local_source_urls = [source_url for _, source_url in parsed_lines]
         self.normalized_data = [normalize_text(line, fold_accents=True) for line in self.raw_data]
 
         max_df = self.config.vector_max_df
@@ -97,6 +102,17 @@ class ChatbotEngine:
             len(self.raw_data),
             len(self.vectorizer.vocabulary_),
         )
+
+    @staticmethod
+    def _parse_knowledge_line(line: str) -> tuple[str, str | None]:
+        answer, separator, source_url = line.rpartition(" || ")
+        if not separator:
+            return line, None
+
+        parsed_url = urlparse(source_url.strip())
+        if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+            return line, None
+        return answer.strip(), source_url.strip()
 
     def _web_config_payload(self) -> dict:
         return {
@@ -327,5 +343,7 @@ class ChatbotEngine:
             index=best.index,
             candidates=top_explanations,
             used_fallback=False,
-            citation_urls=None,
+            citation_urls=(
+                [self.local_source_urls[best.index]] if self.local_source_urls[best.index] else None
+            ),
         )
